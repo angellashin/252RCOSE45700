@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>강의계획서 AI 챗봇</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      max-width: 800px;
+      margin: 20px auto;
+      padding: 0 16px;
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+    .small {
+      font-size: 12px;
+      color: #555;
+      margin-bottom: 16px;
+    }
+    textarea {
+      width: 100%;
+      height: 100px;
+      padding: 8px;
+      box-sizing: border-box;
+    }
+    input {
+      padding: 4px 8px;
+    }
+    button {
+      padding: 8px 16px;
+      margin-top: 8px;
+      cursor: pointer;
+    }
+    #answer {
+      white-space: pre-wrap;
+      border: 1px solid #ddd;
+      padding: 12px;
+      margin-top: 16px;
+      min-height: 100px;
+      background: #fafafa;
+    }
+    #sources {
+      white-space: pre-wrap;
+      border-left: 4px solid #888;
+      padding-left: 8px;
+      margin-top: 12px;
+      font-size: 13px;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+  <h1>KU RAG Chatbot</h1>
+  <div class="small">
+    - LangChain + Chroma + OpenAI 기반 RAG 챗봇입니다.<br />
+    - 세션 ID가 같으면 이전 대화 내용을 기억합니다.
+  </div>
+
+  <label>
+    세션 ID:
+    <input type="text" id="sessionIdInput" />
+  </label>
+  <div class="small">
+    (자동 생성되지만, 여러 창에서 같은 대화 이어가고 싶으면 이 값을 복사해서 사용하세요.)
+  </div>
+
+  <textarea id="questionInput" placeholder="질문을 입력하세요 (예: FIT2081 과제 비중이 어떻게 되나요?)"></textarea>
+  <br />
+  <button id="askButton">질문 (스트리밍)</button>
+  <button id="askOnceButton">질문 (한 번에 응답)</button>
+
+  <h2>답변</h2>
+  <div id="answer">여기에 답변이 표시됩니다.</div>
+
+  <h3>참고 문서</h3>
+  <div id="sources">질문 후 이 영역에 참조한 PDF 출처가 표시됩니다.</div>
+
+  <script>
+    const sessionInput = document.getElementById("sessionIdInput");
+    const storedSessionId = localStorage.getItem("rag_session_id");
+    if (storedSessionId) {
+      sessionInput.value = storedSessionId;
+    } else {
+      const newId = "session-" + Math.random().toString(36).substring(2, 10);
+      sessionInput.value = newId;
+      localStorage.setItem("rag_session_id", newId);
+    }
+
+    const questionInput = document.getElementById("questionInput");
+    const answerDiv = document.getElementById("answer");
+    const sourcesDiv = document.getElementById("sources");
+
+    // 한 번에 응답
+    document.getElementById("askOnceButton").addEventListener("click", async () => {
+      const sessionId = sessionInput.value.trim();
+      const question = questionInput.value.trim();
+      if (!question) {
+        alert("질문을 입력하세요!");
+        return;
+      }
+      answerDiv.textContent = "응답 생성 중...";
+      sourcesDiv.textContent = "";
+
+      const res = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, question }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        answerDiv.textContent = "에러: " + (err.detail || res.statusText);
+        return;
+      }
+
+      const data = await res.json();
+      answerDiv.textContent = data.answer;
+      sourcesDiv.textContent = data.sources_text;
+    });
+
+    // 스트리밍 응답
+    document.getElementById("askButton").addEventListener("click", async () => {
+      const sessionId = sessionInput.value.trim();
+      const question = questionInput.value.trim();
+      if (!question) {
+        alert("질문을 입력하세요!");
+        return;
+      }
+      answerDiv.textContent = "";
+      sourcesDiv.textContent = "";
+
+      const res = await fetch("/chat/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, question }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        answerDiv.textContent = "에러: " + (err.detail || res.statusText);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        answerDiv.textContent += chunk;
+      }
+
+      // 맨 끝에 "[참고 문서]" 섹션 분리
+      const fullText = answerDiv.textContent;
+      const idx = fullText.indexOf("[참고 문서]");
+      if (idx !== -1) {
+        const main = fullText.slice(0, idx).trim();
+        const sources = fullText.slice(idx).trim();
+        answerDiv.textContent = main;
+        sourcesDiv.textContent = sources;
+      }
+    });
+  </script>
+</body>
+</html>
